@@ -1,0 +1,58 @@
+import tempfile
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.models import AnalysisResponse
+from backend.parser import analyze
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+
+
+app = FastAPI(title="Resume Matcher API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+
+
+@app.post("/api/analyze", response_model=AnalysisResponse)
+async def analyze_endpoint(
+    job_description: str = Form(...),
+    resume: UploadFile = File(...),
+):
+    ext = Path(resume.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        content = await resume.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        job, parsed_resume, match = analyze(jd_text=job_description, resume_path=tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    return AnalysisResponse(job=job, resume=parsed_resume, match=match)
