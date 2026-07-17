@@ -23,7 +23,7 @@ load_dotenv(find_dotenv())
 
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    raise ValueError("GROQ_API_KEY not set in .env")
+    api_key = "missing"
 
 client = Groq(api_key=api_key, timeout=15.0)
 model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
@@ -158,6 +158,9 @@ def compute_match(job: JobDescription, resume: Resume) -> MatchResult:
 # ── High-level pipeline ──────────────────────────────────────
 
 def analyze(jd_text: str, resume_path: str | Path) -> tuple[JobDescription, Resume, MatchResult]:
+    if api_key == "missing":
+        raise ValueError("GROQ_API_KEY not set — add it in Railway Variables")
+
     resume_text = read_resume(resume_path)
     if not resume_text:
         raise ValueError(f"Unsupported or unreadable file: {resume_path}")
