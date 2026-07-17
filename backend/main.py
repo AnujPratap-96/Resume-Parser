@@ -1,12 +1,18 @@
+import logging
 import tempfile
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from models import AnalysisResponse
-from parser import analyze
+from backend.models import AnalysisResponse
+from backend.parser import analyze
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -36,6 +42,15 @@ def health():
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"Unhandled error: {exc}\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {str(exc)}"},
+    )
+
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_endpoint(
     job_description: str = Form(...),
@@ -55,6 +70,9 @@ async def analyze_endpoint(
 
     try:
         job, parsed_resume, match = analyze(jd_text=job_description, resume_path=tmp_path)
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -65,4 +83,4 @@ if __name__ == "__main__":
     import os
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=False)

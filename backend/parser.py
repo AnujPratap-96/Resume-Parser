@@ -8,7 +8,7 @@ from groq import Groq
 from pypdf import PdfReader
 from docx import Document
 
-from models import (
+from backend.models import (
     JobDescription,
     Resume,
     Experience,
