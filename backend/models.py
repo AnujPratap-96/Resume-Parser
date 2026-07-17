@@ -7,6 +7,7 @@ class Experience(BaseModel):
     role: Optional[str] = None
     duration: Optional[str] = None
     description: Optional[str] = None
+    highlights: list[str] = []
     skills_used: list[str] = []
 
 
@@ -14,6 +15,8 @@ class Resume(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    github: Optional[str] = None
+    linkedin: Optional[str] = None
     total_experience_years: Optional[float] = None
     skills: list[str] = []
     experiences: list[Experience] = []
@@ -43,6 +46,18 @@ class ExperienceCheck(BaseModel):
     met: bool
 
 
+class ScoreBreakdown(BaseModel):
+    skills: float = Field(ge=0, le=100)
+    experience: float = Field(ge=0, le=100)
+    education: float = Field(ge=0, le=100)
+
+
+class ImprovementTip(BaseModel):
+    area: str
+    suggestion: str
+    impact: str  # "high", "medium", or "low"
+
+
 class MatchResult(BaseModel):
     candidate_name: Optional[str] = None
     overall_score: float = Field(ge=0, le=100)
@@ -51,6 +66,8 @@ class MatchResult(BaseModel):
     education_match: list[str]
     strengths: list[str]
     weaknesses: list[str]
+    score_breakdown: ScoreBreakdown
+    improvement_tips: list[ImprovementTip] = []
     verdict: str
 
 

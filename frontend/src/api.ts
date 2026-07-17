@@ -1,3 +1,12 @@
+export interface Experience {
+  company: string | null
+  role: string | null
+  duration: string | null
+  description: string | null
+  highlights: string[]
+  skills_used: string[]
+}
+
 export interface AnalysisResponse {
   job: {
     role: string
@@ -11,15 +20,11 @@ export interface AnalysisResponse {
     name: string | null
     email: string | null
     phone: string | null
+    github: string | null
+    linkedin: string | null
     total_experience_years: number | null
     skills: string[]
-    experiences: Array<{
-      company: string | null
-      role: string | null
-      duration: string | null
-      description: string | null
-      skills_used: string[]
-    }>
+    experiences: Experience[]
     education: string[]
     projects: string[]
     certifications: string[]
@@ -40,6 +45,16 @@ export interface AnalysisResponse {
     education_match: string[]
     strengths: string[]
     weaknesses: string[]
+    score_breakdown: {
+      skills: number
+      experience: number
+      education: number
+    }
+    improvement_tips: Array<{
+      area: string
+      suggestion: string
+      impact: string
+    }>
     verdict: string
   }
 }

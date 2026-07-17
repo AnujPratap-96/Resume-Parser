@@ -56,3 +56,8 @@ async def analyze_endpoint(
         Path(tmp_path).unlink(missing_ok=True)
 
     return AnalysisResponse(job=job, resume=parsed_resume, match=match)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

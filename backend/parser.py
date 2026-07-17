@@ -3,7 +3,7 @@ import os
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from groq import Groq
 from pypdf import PdfReader
 from docx import Document
@@ -15,16 +15,18 @@ from backend.models import (
     MatchResult,
     SkillMatch,
     ExperienceCheck,
+    ScoreBreakdown,
+    ImprovementTip,
 )
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
     raise ValueError("GROQ_API_KEY not set in .env")
 
 client = Groq(api_key=api_key)
-model = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 
 # ── File readers ──────────────────────────────────────────────
@@ -111,7 +113,9 @@ def parse_resume(text: str) -> Resume:
                 "Extract information based on meaning, not section headings.\n"
                 "Resumes may use different headings for the same content.\n"
                 "Include internships under experiences.\n"
-                "Extract skills mentioned anywhere in the resume.\n\n"
+                "Extract skills mentioned anywhere in the resume.\n"
+                "Extract GitHub and LinkedIn profile URLs if present.\n"
+                "For each experience, extract key achievement highlights as a list.\n\n"
                 f"Return ONLY valid JSON matching this schema:\n{schema}\n\n"
                 "Rules:\n"
                 "- Do not invent information.\n"
@@ -142,7 +146,9 @@ def compute_match(job: JobDescription, resume: Resume) -> MatchResult:
         "5. experience: check if candidate meets minimum experience\n"
         "6. education_match: list of education items that satisfy requirements\n"
         "7. strengths/weaknesses: bullet-point insights\n"
-        "8. verdict: short final recommendation"
+        "8. verdict: short final recommendation\n"
+        "9. score_breakdown: break overall_score into individual scores (0-100 each) for skills, experience, and education\n"
+        "10. improvement_tips: list of actionable suggestions to improve the resume for this role, each with area, suggestion, and impact (high/medium/low)"
     )
     messages = [{"role": "user", "content": prompt}]
     data = _llm_json(messages)
