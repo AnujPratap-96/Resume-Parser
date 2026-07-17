@@ -25,7 +25,7 @@ api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
     raise ValueError("GROQ_API_KEY not set in .env")
 
-client = Groq(api_key=api_key)
+client = Groq(api_key=api_key, timeout=20.0)
 model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 
@@ -61,7 +61,7 @@ def read_resume(file_path: str | Path) -> str | None:
 
 # ── LLM helpers ──────────────────────────────────────────────
 
-def _llm_json(messages: list[dict], max_retries: int = 3) -> dict:
+def _llm_json(messages: list[dict], max_retries: int = 1) -> dict:
     for attempt in range(max_retries):
         try:
             resp = client.chat.completions.create(
