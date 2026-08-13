@@ -57,6 +57,25 @@ export interface AnalysisResponse {
     }>
     verdict: string
   }
+  ats: {
+    ats_score: number
+    keywords: Array<{
+      keyword: string
+      category: string
+      jd_count: number
+      resume_count: number
+      matched: boolean
+    }>
+    advice: string[]
+  }
+  semantic: {
+    pairs: Array<{
+      jd_skill: string
+      matched_skill: string
+      similarity: number
+    }>
+    uncovered_skills: string[]
+  }
 }
 
 export async function analyzeResume(
@@ -74,4 +93,21 @@ export async function analyzeResume(
     throw new Error(err || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+export async function downloadReport(
+  jobDescription: string,
+  file: File
+): Promise<Blob> {
+  const form = new FormData()
+  form.append('job_description', jobDescription)
+  form.append('resume', file)
+
+  const base = import.meta.env.VITE_API_URL || ''
+  const res = await fetch(`${base}/api/report`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(err || `HTTP ${res.status}`)
+  }
+  return res.blob()
 }

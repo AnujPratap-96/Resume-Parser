@@ -71,7 +71,34 @@ class MatchResult(BaseModel):
     verdict: str
 
 
+class AtsKeyword(BaseModel):
+    keyword: str
+    category: str  # "required" | "preferred" | "role"
+    jd_count: int
+    resume_count: int
+    matched: bool
+
+
+class AtsReport(BaseModel):
+    ats_score: float = Field(ge=0, le=100)
+    keywords: list[AtsKeyword]
+    advice: list[str]
+
+
+class SemanticMatchItem(BaseModel):
+    jd_skill: str
+    matched_skill: str
+    similarity: float = Field(ge=0, le=100)
+
+
+class SemanticReport(BaseModel):
+    pairs: list[SemanticMatchItem]
+    uncovered_skills: list[str]
+
+
 class AnalysisResponse(BaseModel):
     job: JobDescription
     resume: Resume
     match: MatchResult
+    ats: AtsReport
+    semantic: SemanticReport

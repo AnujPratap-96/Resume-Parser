@@ -5,16 +5,22 @@ interface Props {
 
 export default function JobDescriptionInput({ value, onChange }: Props) {
   return (
-    <div className="bg-gray-900 rounded-2xl p-5 border border-gray-800">
-      <label className="block text-sm font-medium text-gray-300 mb-2">
-        Job Description
-      </label>
+    <div className="glass-card glass-hover rounded-2xl p-5 flex flex-col">
+      <div className="flex items-center justify-between mb-3">
+        <label className="text-sm font-semibold text-[#eef2f8] flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#6e7bff] shadow-[0_0_8px_rgba(110,123,255,0.8)]" />
+          Job Description
+        </label>
+        <span className="text-xs text-[#91a4bd]">
+          {value.length.toLocaleString()} chars
+        </span>
+      </div>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Paste the full job description here…"
+        placeholder="Paste the full job description here — LinkedIn, Naukri, company careers page…"
         rows={14}
-        className="w-full bg-gray-800 text-gray-100 rounded-xl p-4 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm"
+        className="w-full flex-1 input-glow text-[#eef2f8] rounded-xl p-4 text-sm resize-none placeholder:text-[#91a4bd]/60"
       />
     </div>
   )
