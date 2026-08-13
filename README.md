@@ -24,22 +24,19 @@ Open http://localhost:5173 — paste a JD, upload a resume, click **Analyze**.
 
 ---
 
-## Deploy to Railway (backend — free, no Docker)
+## Deploy to Vercel (backend — free)
 
-[Railway](https://railway.com) deploys Python apps automatically. No Docker needed.
+[Vercel](https://vercel.com) deploys Python apps automatically. No Docker needed.
 
 1. Push this whole `day5/` folder to a GitHub repo
-2. Go to https://railway.com → **New Project** → **Deploy from GitHub**
-3. Select your repo → Railway auto-detects Python
-4. Go to **Settings** → set **Start Command**:
-   ```
-   uvicorn backend.main:app --host 0.0.0.0 --port $PORT
-   ```
-5. Go to **Variables** → add:
+2. Go to https://vercel.com → **Add New** → **Project**
+3. Import your GitHub repo, set **Root Directory** to `backend`
+4. Vercel auto-detects Python/FastAPI → Deploy
+5. Go to **Settings** → **Environment Variables** → add:
    ```
    GROQ_API_KEY = gsk_your_key_here
    ```
-6. Wait for deploy → Railway gives you a `https://your-app.railway.app` URL
+6. Redeploy → Vercel gives you a `https://your-api.vercel.app` URL
 
 ---
 
@@ -50,11 +47,11 @@ Open http://localhost:5173 — paste a JD, upload a resume, click **Analyze**.
 3. Framework = **Vite**, Build = `npm run build`, Output = `dist`
 4. Add environment variable:
    ```
-   VITE_API_URL = https://your-backend.railway.app
+   VITE_API_URL = https://your-api.vercel.app
    ```
 5. Deploy → Vercel gives you a `https://your-app.vercel.app` URL
 
-That's it. Users hit your Vercel URL, upload resumes, and the backend on Railway does the analysis.
+That's it. Users hit your Vercel URL, upload resumes, and the backend on Vercel does the analysis.
 
 ---
 
@@ -66,13 +63,18 @@ day5/
 │   ├── main.py           ← API endpoints (POST /api/analyze)
 │   ├── models.py         ← Pydantic schemas
 │   ├── parser.py         ← Resume parsing + matching logic
-│   ├── requirements.txt
+│   ├── ats.py            ← ATS keyword density analysis
+│   ├── semantic.py       ← Fuzzy skill matching (rapidfuzz)
+│   ├── report.py         ← PDF report generation (reportlab)
+│   ├── cache.py          ← Response cache + rate limiting
+│   ├── pyproject.toml    ← Vercel Python build reads this
 │   └── .env.example
 ├── frontend/             ← React + Vite + Tailwind
 │   ├── src/
 │   │   ├── App.tsx
 │   │   ├── api.ts
 │   │   └── components/
+│   │       ├── Landing.tsx
 │   │       ├── JobDescriptionInput.tsx
 │   │       ├── ResumeUploader.tsx
 │   │       ├── ResultsDashboard.tsx
@@ -80,9 +82,7 @@ day5/
 │   ├── package.json
 │   └── vite.config.ts
 ├── resumes/              ← Sample resumes for testing
-├── .env.example
-├── run.py                ← Launcher (optional)
-└── pyproject.toml
+└── .env.example
 ```
 
 ## API Endpoints
