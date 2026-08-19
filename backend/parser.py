@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv, find_dotenv
@@ -12,28 +15,64 @@ from docx import Document
 from models import (
     JobDescription,
     Resume,
-    Experience,
     MatchResult,
-    SkillMatch,
-    ExperienceCheck,
-    ScoreBreakdown,
-    ImprovementTip,
     AnalysisResponse,
 )
 
 load_dotenv(find_dotenv())
 
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    api_key = "missing"
+logger = logging.getLogger(__name__)
 
-client = Groq(api_key=api_key, timeout=15.0)
-model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "20"))
+LLM_MAX_RETRIES = max(1, int(os.getenv("LLM_MAX_RETRIES", "2")))
+
+# Weights used to recombine score_breakdown into overall_score.
+SCORE_WEIGHTS = {"skills": 0.6, "experience": 0.3, "education": 0.1}
+
+
+class ConfigError(RuntimeError):
+    """Server is misconfigured (e.g. no API key) — not the caller's fault."""
+
+
+class ResumeReadError(ValueError):
+    """Uploaded file could not be turned into text — safe to show the user."""
+
+
+_client: Groq | None = None
+_client_lock = threading.Lock()
+
+
+def has_api_key() -> bool:
+    return bool(os.getenv("GROQ_API_KEY"))
+
+
+def _get_client() -> Groq:
+    """Build the Groq client lazily.
+
+    Built at first use rather than at import so the module can be imported
+    (and tested) without an API key in the environment.
+    """
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                key = os.getenv("GROQ_API_KEY")
+                if not key:
+                    raise ConfigError("GROQ_API_KEY is not set")
+                _client = Groq(api_key=key, timeout=LLM_TIMEOUT)
+    return _client
 
 
 # ── File readers ──────────────────────────────────────────────
 
 CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+SCANNED_PDF_MESSAGE = (
+    "Could not extract text from this PDF — it is likely a scanned "
+    "(image-based) document. Resumes with photos/emoji as images need "
+    "OCR. Convert it to DOCX and try again."
+)
 
 
 def clean_text(text: str) -> str:
@@ -49,6 +88,34 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+def _ocr_pdf(file_path: str | Path) -> str:
+    """Last-resort OCR for scanned PDFs.
+
+    Needs pdf2image + pytesseract AND the poppler/tesseract binaries. A missing
+    binary raises OSError (TesseractNotFoundError), not ImportError — catching
+    only ImportError let that escape as a 500.
+    """
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+
+        parts = [
+            pytesseract.image_to_string(img)
+            for img in convert_from_path(str(file_path), dpi=200)
+        ]
+        cleaned = clean_text("\n".join(parts))
+    except Exception as exc:  # missing package, missing binary, or OCR failure
+        logger.warning("OCR fallback unavailable: %s", exc)
+        raise ResumeReadError(SCANNED_PDF_MESSAGE) from exc
+
+    if len(cleaned) < 50:
+        raise ResumeReadError(
+            "Text extraction produced too little content. The PDF may be "
+            "scanned/image-only or corrupted."
+        )
+    return cleaned
+
+
 def read_pdf(file_path: str | Path) -> str:
     reader = PdfReader(file_path)
     pages = []
@@ -58,28 +125,9 @@ def read_pdf(file_path: str | Path) -> str:
             text = page.extract_text(extraction_mode="layout")
         if text and len(text.strip()) >= 20:
             pages.append(text)
-    raw = "\n".join(pages)
-    cleaned = clean_text(raw)
+    cleaned = clean_text("\n".join(pages))
     if len(cleaned) < 50:
-        try:
-            from pdf2image import convert_from_path
-            import pytesseract
-
-            ocr_parts = []
-            for img in convert_from_path(str(file_path), dpi=200):
-                ocr_parts.append(pytesseract.image_to_string(img))
-            cleaned = clean_text("\n".join(ocr_parts))
-        except ImportError:
-            raise ValueError(
-                "Could not extract text from this PDF — it is likely a scanned "
-                "(image-based) document. Resumes with photos/emoji as images need "
-                "OCR. Convert it to DOCX and try again."
-            )
-        if len(cleaned) < 50:
-            raise ValueError(
-                "Text extraction produced too little content. The PDF may be "
-                "scanned/image-only or corrupted."
-            )
+        cleaned = _ocr_pdf(file_path)
     return cleaned
 
 
@@ -95,42 +143,44 @@ def read_docx(file_path: str | Path) -> str:
                 if cell.text.strip():
                     lines.append(cell.text)
     for section in doc.sections:
-        lines.append(section.header.paragraphs[0].text if section.header.paragraphs else "")
-    for section in doc.sections:
-        lines.append(section.footer.paragraphs[0].text if section.footer.paragraphs else "")
+        for part in (section.header, section.footer):
+            for paragraph in part.paragraphs:
+                if paragraph.text.strip():
+                    lines.append(paragraph.text)
     return clean_text("\n".join(lines))
 
 
-def read_resume(file_path: str | Path) -> str | None:
+def read_resume(file_path: str | Path) -> str:
     p = Path(file_path)
     suffix = p.suffix.lower()
     if suffix == ".pdf":
         return read_pdf(p)
-    elif suffix == ".docx":
+    if suffix == ".docx":
         return read_docx(p)
-    return None
+    raise ResumeReadError(f"Unsupported file type '{suffix}'. Upload a PDF or DOCX.")
 
 
 # ── LLM helpers ──────────────────────────────────────────────
 
-def _llm_json(messages: list[dict], max_retries: int = 3) -> dict:
-    for attempt in range(max_retries):
+def _llm_json(messages: list[dict], max_retries: int = LLM_MAX_RETRIES) -> dict:
+    attempts = max(1, max_retries)
+    last_error: Exception | None = None
+    for attempt in range(attempts):
         try:
-            resp = client.chat.completions.create(
-                model=model,
+            resp = _get_client().chat.completions.create(
+                model=MODEL,
                 messages=messages,
                 response_format={"type": "json_object"},
             )
             content = clean_text(resp.choices[0].message.content or "")
             return json.loads(content)
-        except json.JSONDecodeError:
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(2 ** attempt)
-        except Exception:
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(2 ** attempt)
+        except ConfigError:
+            raise  # retrying a missing API key is pointless
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(2 ** attempt)
+    raise last_error if last_error else RuntimeError("LLM call failed")
 
 
 # ── JD parser ────────────────────────────────────────────────
@@ -216,7 +266,9 @@ def compute_match(job: JobDescription, resume: Resume, semantic_pairs: list[dict
         "candidate.skills, projects, or experiences.skills_used.\n"
         "- Never mention a technology in weaknesses if it is in the resume.\n"
         "- A technology with a different name but the same meaning (e.g. "
-        "Node.js vs NodeJS, REST API vs REST APIs) counts as present.\n\n"
+        "Node.js vs NodeJS, REST API vs REST APIs) counts as present.\n"
+        "- Related but distinct technologies are NOT the same skill "
+        "(MySQL is not PostgreSQL, Java is not JavaScript, R is not React).\n\n"
         "Be thorough:\n"
         "1. overall_score: 0-100 based on weighted criteria\n"
         "2. skills.matched: skills from resume that match JD requirements\n"
@@ -236,35 +288,21 @@ def compute_match(job: JobDescription, resume: Resume, semantic_pairs: list[dict
 
 # ── High-level pipeline ──────────────────────────────────────
 
-def analyze(jd_text: str, resume_path: str | Path) -> tuple[JobDescription, Resume, MatchResult]:
-    if api_key == "missing":
-        raise ValueError("GROQ_API_KEY not set — add it in Railway Variables")
-
-    resume_text = read_resume(resume_path)
-    if not resume_text:
-        raise ValueError(f"Unsupported or unreadable file: {resume_path}")
-
-    job = parse_job_description(jd_text)
-    resume = parse_resume(resume_text)
-    match = compute_match(job, resume)
-    return job, resume, match
-
-
 def analyze_full(jd_text: str, resume_path: str | Path) -> AnalysisResponse:
     """Run the full pipeline: JD parse → resume parse → match + ATS + semantic."""
 
     from ats import analyze_ats
     from semantic import semantic_match
 
-    if api_key == "missing":
-        raise ValueError("GROQ_API_KEY not set — add it in Railway Variables")
-
     resume_text = read_resume(resume_path)
-    if not resume_text:
-        raise ValueError(f"Unsupported or unreadable file: {resume_path}")
 
-    job = parse_job_description(jd_text)
-    resume = parse_resume(resume_text)
+    # The JD parse and the resume parse are independent LLM calls — running
+    # them together cuts roughly a third off end-to-end latency.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        job_future = pool.submit(parse_job_description, jd_text)
+        resume_future = pool.submit(parse_resume, resume_text)
+        job = job_future.result()
+        resume = resume_future.result()
 
     semantic = semantic_match(job, resume)
     semantic_pairs = [p.model_dump() for p in semantic.pairs]
@@ -282,6 +320,19 @@ def analyze_full(jd_text: str, resume_path: str | Path) -> AnalysisResponse:
     )
 
 
+# Word boundary that treats '#', '+' and '.' as part of the term, so "C" does
+# not match inside "C++" and "node" does not match inside "node.js".
+_BOUNDARY = r"(?<![\w#+.]){term}(?![\w#+.])"
+
+
+def _mentions(text: str, skill: str) -> bool:
+    """True if `text` refers to `skill` as a whole term."""
+    if not text or not skill:
+        return False
+    pattern = _BOUNDARY.replace("{term}", re.escape(skill))
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
 def enforce_consistency(
     job: JobDescription,
     resume: Resume,
@@ -290,58 +341,69 @@ def enforce_consistency(
 ) -> MatchResult:
     """Deterministically fix LLM contradictions.
 
-    Any JD skill that semantically matches a resume skill is by definition
-    present — the LLM cannot list it as missing or as a weakness.
+    A JD skill that equals a resume skill after normalization — or that the
+    semantic matcher paired — is present by definition, so the LLM may not list
+    it as missing or as a weakness.
+
+    Comparison is exact on normalized terms. The old substring test
+    ("jd_term in r or r in jd_term") reported "R" as covered by "React" and
+    "C" as covered by "C++".
     """
 
     from semantic import normalize_skill
 
-    resume_skills = {normalize_skill(s) for s in resume.skills if s}
+    resume_terms = {normalize_skill(s) for s in resume.skills if s}
     for exp in resume.experiences:
-        for s in exp.skills_used:
-            resume_skills.add(normalize_skill(s))
-    jd_skills = {normalize_skill(s) for s in job.required_skills + job.preferred_skills}
-    resume_terms = {s.lower() for s in resume_skills}
-    jd_terms = {s.lower() for s in jd_skills}
-
+        resume_terms.update(normalize_skill(s) for s in exp.skills_used if s)
     for pair in semantic_pairs:
-        jd_norm = normalize_skill(pair["jd_skill"])
-        jd_terms.add(jd_norm.lower())
-        resume_terms.add(normalize_skill(pair["matched_skill"]).lower())
+        resume_terms.add(normalize_skill(pair["matched_skill"]))
+        resume_terms.add(normalize_skill(pair["jd_skill"]))
+    resume_terms.discard("")
 
-    present = set()
-    for jd_term in jd_terms:
-        if jd_term in resume_terms or any(
-            jd_term == r or jd_term in r or r in jd_term
-            for r in resume_terms
-        ):
-            present.add(jd_term)
+    jd_skills = [s for s in job.required_skills + job.preferred_skills if s]
+    present_terms = {normalize_skill(s) for s in jd_skills} & resume_terms
+    present_skills = [s for s in jd_skills if normalize_skill(s) in present_terms]
 
     matched = list(match.skills.matched)
-    missing = [s for s in match.skills.missing if normalize_skill(s).lower() not in present]
+    matched_terms = {normalize_skill(s) for s in matched}
     newly_matched = [
-        s for s in (job.required_skills + job.preferred_skills)
-        if normalize_skill(s).lower() in present
-        and s not in matched
-        and s not in missing
+        s for s in present_skills if normalize_skill(s) not in matched_terms
     ]
-    if newly_matched:
-        matched.extend(newly_matched)
+    matched.extend(newly_matched)
 
     match.skills.matched = matched
-    match.skills.missing = missing
+    match.skills.missing = [
+        s for s in match.skills.missing if normalize_skill(s) not in present_terms
+    ]
 
-    for skill in present:
-        match.weaknesses = [
-            w for w in match.weaknesses
-            if normalize_skill(skill) not in normalize_skill(w)
-        ]
+    for skill in present_skills:
+        match.weaknesses = [w for w in match.weaknesses if not _mentions(w, skill)]
         match.improvement_tips = [
-            t for t in match.improvement_tips
-            if normalize_skill(skill) not in normalize_skill(t.suggestion)
+            t for t in match.improvement_tips if not _mentions(t.suggestion, skill)
         ]
 
-    if present and match.overall_score < 40:
-        match.overall_score = min(40.0, match.overall_score + 10)
+    if newly_matched:
+        _rescore(match)
 
     return match
+
+
+def _rescore(match: MatchResult) -> None:
+    """Recompute the skills sub-score and overall score after reclassification.
+
+    Keeps overall_score consistent with the breakdown the UI renders. The old
+    code nudged overall_score by a flat +10 and left score_breakdown untouched,
+    so the headline number contradicted its own bars.
+    """
+    total = len(match.skills.matched) + len(match.skills.missing)
+    if total:
+        match.score_breakdown.skills = round(
+            len(match.skills.matched) / total * 100, 1
+        )
+    b = match.score_breakdown
+    weighted = (
+        b.skills * SCORE_WEIGHTS["skills"]
+        + b.experience * SCORE_WEIGHTS["experience"]
+        + b.education * SCORE_WEIGHTS["education"]
+    )
+    match.overall_score = round(min(100.0, max(0.0, weighted)), 1)

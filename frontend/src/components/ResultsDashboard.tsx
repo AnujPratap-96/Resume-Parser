@@ -38,13 +38,13 @@ export default function ResultsDashboard({ data, jobDescription, resumeFile }: P
             </div>
           )}
           <p className="text-[#a5b0ff] font-semibold mt-3 text-lg">{match.verdict}</p>
-          {resumeFile && (
+          {(data.analysis_id || resumeFile) && (
             <button
               disabled={downloading}
               onClick={async () => {
                 setDownloading(true)
                 try {
-                  const blob = await downloadReport(jobDescription, resumeFile)
+                  const blob = await downloadReport(data.analysis_id, jobDescription, resumeFile)
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
                   a.href = url

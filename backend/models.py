@@ -97,6 +97,7 @@ class SemanticReport(BaseModel):
 
 
 class AnalysisResponse(BaseModel):
+    analysis_id: Optional[str] = None
     job: JobDescription
     resume: Resume
     match: MatchResult

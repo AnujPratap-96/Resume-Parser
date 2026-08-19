@@ -5,6 +5,10 @@ from models import JobDescription, Resume, SemanticReport, SemanticMatchItem
 _lock = threading.Lock()
 _fuzz = None
 
+SHORT_SKILL_LEN = 2
+
+MATCH_THRESHOLD = 80.0
+
 
 def _load_fuzz():
     global _fuzz
@@ -19,7 +23,6 @@ def _load_fuzz():
                 _fuzz = False
     return _fuzz
 
-
 SYNONYMS = {
     "ml": "machine learning",
     "ai": "artificial intelligence",
@@ -28,24 +31,31 @@ SYNONYMS = {
     "databases": "database",
     "k8s": "kubernetes",
     "rest apis": "rest api",
+    "restful api": "rest api",
+    "restful apis": "rest api",
     "apis": "api",
     "javascript": "js",
     "typescript": "ts",
     "nodejs": "node.js",
+    "node": "node.js",
     "react.js": "react",
+    "reactjs": "react",
     "vue.js": "vue",
+    "vuejs": "vue",
     "angular.js": "angular",
+    "angularjs": "angular",
     "git/github": "git",
-    "mysql": "sql",
-    "postgresql": "sql",
+    "golang": "go",
+    "postgres": "postgresql",
     "express.js": "express",
+    "expressjs": "express",
     "next.js": "next",
+    "nextjs": "next",
     "tailwind css": "tailwind",
+    "tailwindcss": "tailwind",
     "material ui": "material-ui",
     "html5": "html",
     "css3": "css",
-    "html": "html5",
-    "css": "css3",
 }
 
 
@@ -59,6 +69,8 @@ def _similarity(a: str, b: str, fuzz) -> float:
         return 100.0
     if not a or not b:
         return 0.0
+    if len(a) <= SHORT_SKILL_LEN or len(b) <= SHORT_SKILL_LEN:
+        return 0.0  # already known unequal, and too short to fuzzy-match safely
     if fuzz:  # fuzzy token match catches reordering + punctuation
         return max(
             fuzz.ratio(a, b),
@@ -97,7 +109,7 @@ def semantic_match(job: JobDescription, resume: Resume) -> SemanticReport:
             score = _similarity(normalize_skill(jd_skill), normalize_skill(res_skill), fuzz)
             if score > best[0]:
                 best = (score, res_skill)
-        if best[0] >= 80.0 and best[1]:
+        if best[0] >= MATCH_THRESHOLD and best[1]:
             seen_pairs.add((jd_skill.lower(), best[1].lower()))
             pairs.append(SemanticMatchItem(
                 jd_skill=jd_skill,

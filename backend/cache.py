@@ -40,10 +40,28 @@ class SlidingWindowLimiter:
         self._max = max_requests
         self._window = window_seconds
         self._lock = threading.Lock()
+        self._last_sweep = 0.0
+
+    def _sweep(self, now: float) -> None:
+        """Drop clients with no hits left in the window.
+
+        Without this the dict keeps one entry per IP ever seen — an unbounded
+        leak on a public endpoint. Runs at most once per window.
+        """
+        if now - self._last_sweep < self._window:
+            return
+        self._last_sweep = now
+        stale = [
+            cid for cid, stamps in self._hits.items()
+            if not stamps or now - stamps[-1] >= self._window
+        ]
+        for cid in stale:
+            del self._hits[cid]
 
     def allow(self, client_id: str) -> bool:
         now = time.time()
         with self._lock:
+            self._sweep(now)
             stamps = [
                 t for t in self._hits.get(client_id, [])
                 if now - t < self._window
